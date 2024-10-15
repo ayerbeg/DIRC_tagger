@@ -1,0 +1,1079 @@
+// Author: Akira Okumura 2011/5/1
+
+/******************************************************************************
+ * Copyright (C) 2006-, Akira Okumura                                         *
+ * All rights reserved.                                                       *
+ *****************************************************************************/
+#include <iostream>
+
+#include "TCanvas.h"
+
+#include "TLine.h"
+#include "TGeoBBox.h"
+#include "TGeoCompositeShape.h"
+#include "TGeoParaboloid.h"
+#include "TGeoSphere.h"
+#include "TGeoTube.h"
+#include "TH2.h"
+#include "TThread.h"
+#include "TLegend.h"
+#include "TRandom3.h"
+#include "TRandom2.h"
+#include "TRandom1.h"
+#include "TGeoNavigator.h"
+
+#include "TGLViewer.h" 
+
+// #include "RotationX.h"
+// #include "RotationZ.h"
+//#include "VectorUtil.h"
+#include "TVector3.h"
+
+#include <TStyle.h>
+
+#include "TMath.h"
+
+#include "AFocalSurface.h"
+#include "AGeoUtil.h"
+#include "AMirror.h"
+#include "AObscuration.h"
+#include "AOpticsManager.h"
+#include "ARayShooter.h"
+
+using namespace TMath;
+using namespace ROOT::Math;
+
+// define useful units
+static const Double_t cm = AOpticsManager::cm();
+static const Double_t mm = AOpticsManager::mm();
+static const Double_t um = AOpticsManager::um();
+static const Double_t nm = AOpticsManager::nm();
+static const Double_t m = AOpticsManager::m();
+
+
+
+Double_t foc_sep = 5;//in cm, FROM THE SIDE WINDOW
+
+// CHOOSE A CASE
+// 1: Flat mirror;
+// 2: flat surface and tracker 3;
+// 3: paraboloid mirror;
+// 4: spherical mirror
+Int_t mirror2use = 4;
+
+// CHOOSE A CASE (PHOTONS: TRUE/1; RAYS: FALSE/0)
+bool rayORphotons = 1;
+
+// RANDOM DISTRIBUTIONS OR ONE AT THE TIME (RANDOM: TRUE/1; ONE AT THE TIME: FALSE/0)
+bool randomDist = 1;
+
+
+// DRAW THE RAYS (1/TRUE) OR NOT (0/FALSE)
+bool drawme = 1;
+
+// CHOOSE A CASE
+// 0: cone of 11.31 aperture
+// 1: straight perpendicular rays
+// 2: inverse cone originated inside the box
+Int_t onewayoranother = 0; //the variable is declared and defined here, but it could redifined inside the main code
+
+
+const char *mirror_case = "Spherical - Dist 3 - Photons";
+
+AOpticsManager* MakeGeometry() {
+
+  // Make the geometry of a simple flat mirror
+
+  AOpticsManager* manager =
+    new AOpticsManager("manager", "PID_Cherenkov");
+  //   new AOpticsManager("manager", "SimpleParabolicTelescope");
+  manager->SetNsegments(100);  // Set the smoothness of surface drawing. Display use only.
+
+  //******************************************************************
+  // Make the world
+  //******************************************************************
+  TGeoBBox* worldbox = new TGeoBBox("worldbox", 6*m, 6 *m, 6 *m);
+  AOpticalComponent* world = new AOpticalComponent("world", worldbox);
+  manager->SetTopVolume(world);
+  //******************************************************************
+
+  // Some of these are important for the Spherical
+
+  // It was measured by hand. For the spherical could be important
+  // since the construction of the spherical sector is based on this
+  // dimension
+  const Double_t kMirrorRad = 40.5/2. *cm;
+  
+  const Double_t kFocalLength = 1 *m; //Charles said that probably is the one we have
+  const Double_t kMirrorSag = kMirrorRad * kMirrorRad / 4. / kFocalLength; 
+  
+
+ 
+
+  //******************************************************************
+  // Define a flat circule for the  mirror
+  // all these dimensions should be defined externally
+  // so, the relative positions are estimated previously
+  //******************************************************************
+
+  Double_t mirror_dia = 40.5 *cm;
+  Double_t mirror_thick = 1.5*mm;
+
+  // Mirror has to be a SHAPE, but if we want transparent surface
+  // for visual purposes, has to be a VOLUME
+  
+  TGeoTube* flat =
+    new TGeoTube("flat mirror", 0.0 ,  mirror_dia/2, mirror_thick);
+  
+  // make a 45 deg rotation
+  Double_t dist_T1_FP = 50*cm;
+  
+  // mirror central point: distance focal point-tracker1 + 5 cm arbitrary separation + 11 cm the altitude of the
+  // shorter size of the mirror (due to inclination) + the altitude of the middle point corrected
+  //Double_t dist_ori = dist_T1_FP + 5*cm + 11.0*cm + 3.32*cm; //I gave unit to each distance to avoid conflicts from previously defined variables
+
+  
+  // mirror central point: distance focal point-tracker1 + 2 cm tracker 1 to bottom of the box + 18.73 cm the altitude of the
+  // of the center of the mirror according Alexander design
+  Double_t dist_ori = dist_T1_FP + 2.5*cm + 18.73*cm; //I gave unit to each distance to avoid conflicts from previously defined variables
+  
+  TGeoRotation* rot = new TGeoRotation("", 90., 45, 0); //center at origin
+  TGeoCombiTrans *combi1 = new TGeoCombiTrans(-30.*mm, 0, dist_ori, rot);// position in X was corrected by hand
+
+  
+  //*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-
+  TGeoMaterial *fmat = new TGeoMaterial("Vacuum",0,0,0);
+  TGeoMedium   *fmed = new TGeoMedium("Vacuum", 1, fmat);
+  TGeoVolume *flatsur = gGeoManager->MakeTube("flat mirror", fmed , 0,  mirror_dia/2, mirror_thick);
+
+
+  AMirror* mirror = new AMirror("mirror", flat);
+      
+  // add the mirror to the world
+  // world->AddNode(mirror, 1, combi1);
+
+  // just a flat surface
+  //  world->AddNode(flatsur, 1, combi1); 
+  //******************************************************************
+  
+  
+  //******************************************************************
+  // Define a paraboloid  mirror
+  // all these dimensions should be defined externally
+  // so, the relative positions are estimated previously
+  //******************************************************************
+  
+  // Define a paraboloid for the mirror
+  TGeoParaboloid* para =
+    new TGeoParaboloid("mirror_para", 0, kMirrorRad, kMirrorSag / 2.);
+  
+  TGeoTranslation* mirror_tr1 =
+    new TGeoTranslation("mirror_tr1", 0, 0, kMirrorSag / 2.);
+  mirror_tr1->RegisterYourself();
+  
+  TGeoTranslation* mirror_tr2 =
+    new TGeoTranslation("mirror_tr2", 0, 0, kMirrorSag / 2. - 1 * um);
+  mirror_tr2->RegisterYourself();
+  
+  // Composite two TGeoParaboloid to make a thin parabolic surface
+  TGeoCompositeShape* mirror_comp = new TGeoCompositeShape(
+							   "mirror_comp", "mirror_para:mirror_tr2 - mirror_para:mirror_tr1");
+
+  
+  // Make a parabolic mirror
+  AMirror* paramirror = new AMirror("paramirror", mirror_comp);
+  //  world->AddNode(paramirror, 1, combi1);
+  //******************************************************************
+
+
+  //******************************************************************
+  // Define a spheric  mirror
+  // all these dimensions should be defined externally
+  // so, the relative positions are estimated previously
+  //******************************************************************
+  
+  Double_t sphererad = 2*  kFocalLength;
+
+  // The angle 5.81 is the theta angle sustained by the sector which has a diameter of 40.5 cm (our mirror)
+  // Could be a good idea calculate it instead of putting the number by hand
+  
+  TGeoSphere* sphe = 
+    new TGeoSphere("mirror_sphe", sphererad, sphererad+1*um, 180-5.81, 180);// settings the angles like this,
+  // facilitates the orientation of the mirror.
+
+  TGeoRotation* Spherot = new TGeoRotation("", 90., 45, 0); //center at origin
+  // The term (sphererad*Cos(45*DegToRad() )) is due to how the sphere is constructed.
+  TGeoCombiTrans *Sphecombi = new TGeoCombiTrans(-30.*mm+(sphererad*Cos(45*DegToRad())) , 0,(sphererad*Cos(45*DegToRad() ))+dist_ori, Spherot);// position in X was corrected by hand
+
+  //  cout<<"dist_ori: "<<dist_ori<<" "<<kFocalLength+dist_ori<<endl;
+
+  // Make a spheric mirror
+  AMirror* sphemirror = new AMirror("sphemirror", sphe);
+  //world->AddNode(sphemirror, 1, Sphecombi);
+
+
+
+  //******************************************************************
+
+
+  switch(mirror2use)
+    {
+    case 1:
+      // Flat mirror
+      world->AddNode(mirror, 1, combi1);
+      break;
+    case 2:
+      // Flat surface
+      world->AddNode(flatsur, 1, combi1); // just a flat surface
+      break;
+    case 3:
+      // Paraboloid mirror (useless)
+      world->AddNode(paramirror, 1, combi1);
+      break;
+    case 4:
+      // spherical mirror 1m focal length
+      world->AddNode(sphemirror, 1, Sphecombi);
+      break;
+    }
+
+
+
+  
+  //******************************************************************
+  // Making the Box
+  // This is just a representation of the containing the mirror
+  // In order to remove any optical properties
+  // its material is vacuum 
+  //******************************************************************
+
+  //need to rename these, it is confusing
+  Double_t x_box = 901.1 *mm;
+  Double_t y_box = 440.0 *mm;
+  Double_t z_box = 1612.1 *mm;
+  
+  TGeoMaterial *mat = new TGeoMaterial("Vacuum",0,0,0);
+  TGeoMaterial *AluMat = new TGeoMaterial("Aluminum",26.98,13,2.7);
+ 
+  TGeoMedium   *med = new TGeoMedium("Vacuum",1,mat);
+  TGeoMedium   *AluMed = new TGeoMedium("Aluminum",1, AluMat);
+
+  // TGeoVolume *boxX = gGeoManager -> MakeBox("BOXX", AluMed, 3*mm, y_box/2, z_box/2);
+  // TGeoVolume *boxY = gGeoManager -> MakeBox("BOXY", AluMed, x_box/2, 3*mm, z_box/2);
+  // TGeoVolume *boxZ = gGeoManager -> MakeBox("BOXZ", AluMed, x_box/2, y_box/2, 3*mm); // not used
+
+  
+  double originX[3] = {-x_box/2, 0, z_box/2 + dist_T1_FP+2*cm};
+  TGeoBBox* boxX= new TGeoBBox("BOXX",  3*mm, y_box/2, z_box/2,  originX);
+ 
+  double originY1[3] = { 0, y_box/2, z_box/2+ dist_T1_FP+2*cm};
+  TGeoBBox* boxY1= new TGeoBBox("BOXY1",  x_box/2, 3*mm, z_box/2, originY1);
+
+  double originY2[3] = { 0, -y_box/2, z_box/2+ dist_T1_FP+2*cm};
+  TGeoBBox* boxY2= new TGeoBBox("BOXY2",  x_box/2, 3*mm, z_box/2, originY2);
+
+  double originZ[3] = {0, 0, dist_T1_FP+2*cm};
+  TGeoBBox* boxZ= new TGeoBBox("BOXZ", x_box/2, y_box/2, 3*mm, originZ);
+
+
+  //  TGeoVolume *box = gGeoManager->MakeBox("BOX", med, x_box/2, y_box/2, z_box/2);
+  
+  // TGeoTranslation* box_tr =
+  //   new TGeoTranslation("box_tr", 0, 0, z_box/2+ dist_T1_FP+2*cm); // this position is wrt the focal point estimated
+
+
+  // the 2cm distance is the separation of the box from the tracker 1. Nathan gave 1/2''
+  // REMEMBER, all the positions are wrt the focal point
+  // TGeoTranslation* box_trX1 =
+  //   new TGeoTranslation("box_trX1", x_box/2, 0, z_box/2+ dist_T1_FP+2*cm); // this position is wrt the focal point estimated
+
+  
+  // side opposite to the PMT
+  TGeoTranslation* box_trX2 =
+    new TGeoTranslation("box_trX2", -x_box/2, 0, z_box/2+ dist_T1_FP+2*cm); // this position is wrt the focal point estimated
+  // large box wall
+  TGeoTranslation* box_trY1 =
+    new TGeoTranslation("box_trY1", 0, y_box/2, z_box/2+ dist_T1_FP+2*cm); // this position is wrt the focal point estimated
+  // large box wall
+  TGeoTranslation* box_trY2 =
+    new TGeoTranslation("box_trY2", 0, -y_box/2, z_box/2+ dist_T1_FP+2*cm); // this position is wrt the focal point estimated
+  // base of the box
+  TGeoTranslation* box_trZ1 =
+    new TGeoTranslation("box_trZ1", 0, 0, dist_T1_FP+2*cm); // this position is wrt the focal point estimated
+
+
+  // All the next lines is to make the walls opaque to the rays. For some reason the previous method was not working
+  AObscuration* obsX = new AObscuration("obsX", boxX);
+  gGeoManager->GetVolume("obsX")->SetTransparency(60); // for some reason IT makes everything transparent
+
+  manager->GetTopVolume()->AddNode(obsX, 1);
+
+  AObscuration* obsY1 = new AObscuration("obsY1", boxY1);
+  manager->GetTopVolume()->AddNode(obsY1, 1);
+
+  AObscuration* obsY2 = new AObscuration("obsY2", boxY2);
+  manager->GetTopVolume()->AddNode(obsY2, 1);
+    
+  AObscuration* obsZ = new AObscuration("obsZ", boxZ);
+  if(mirror2use != 2) // when we don't want the mirror is normally for debugging, so we need to remove ths bottom of the box
+    manager->GetTopVolume()->AddNode(obsZ, 1);
+
+
+ 
+  //  boxX->SetTransparency(60); // a bit opaque to see the rays
+  //boxY->SetTransparency(60);
+
+  // a bit opaque to see the rays
+  //  world->AddNode(box, 1, box_tr);
+  //  world->AddNode(boxX, 1, box_trX1);
+  // world->AddNode(boxX, 1, box_trX2);
+
+  // world->AddNode(boxY, 1, box_trY1);
+  // world->AddNode(boxY, 1, box_trY2);
+
+  //world->AddNode(boxZ, 1, box_trZ1);
+  //******************************************************************
+
+
+  
+  //******************************************************************
+  // This is a small box representing the XY-tracker 1
+  TGeoVolume *box2 = gGeoManager->MakeBox("BOX", med, 10.*cm, 5*cm, 6*mm);
+  
+  TGeoTranslation* box_tr2 =
+    new TGeoTranslation("box_tr2", 0, 0, 500*mm); // this position is wrt the focal point estimated
+  // box2->SetTransparency(60);
+  box2->SetLineColor(kRed);
+  world->AddNode(box2, 1, box_tr2);
+  //******************************************************************
+
+  
+  //******************************************************************
+  // This is a box representing the XY-tracker 3
+  //  TGeoVolume *box3 = gGeoManager->MakeBox("BOX", AluMed, 25.*cm, 25*cm, 6*mm);
+
+  double Zbox3[3] = {0, 0, -1250*mm};
+  TGeoBBox* box3= new TGeoBBox("BOXZ", 25*cm, 25*cm, 6*mm, Zbox3);
+
+  
+  // TGeoTranslation* box_tr3 =
+  //   new TGeoTranslation("box_tr3", 0, 0, -1250*mm); // this position is wrt the focal point estimated
+  // box2->SetTransparency(60);
+  
+   
+  AObscuration* obstra3 = new AObscuration("obstra3", box3); // only works with shapes, not volumes
+  if(mirror2use == 2)
+  manager->GetTopVolume()->AddNode(obstra3, 1);
+
+  
+  //  box3-> SetLineColor(kRed);
+  //  world->AddNode(box3, 1, box_tr3);
+ 
+  
+  //******************************************************************
+
+
+  
+
+  //******************************************************************
+  // Define a box for the focal surface
+  //******************************************************************
+  //TGeoTube* focal_tube = new TGeoTube("focal_tube", 0, 50*cm, 10 * um);
+
+ 
+  TGeoBBox* focalbox = new TGeoBBox("FocalBox", 3*mm, y_box/2, 20*cm);
+  
+  // TGeoTranslation* focal_tr =
+  //   new TGeoTranslation("focal_tr", x_box/2 + foc_sep*cm, 0, dist_ori );
+
+  
+  TGeoTranslation* focal_tr =
+    new TGeoTranslation("focal_tr", x_box/2 + foc_sep*cm, 0,  dist_T1_FP + 2*cm +20*cm );
+
+  // TGeoRotation* rotfoc = new TGeoRotation("", 90., 90, 0); //center at origin
+  //  TGeoCombiTrans *combi1 = new TGeoCombiTrans(0, 0, 107.68*cm, rot);
+  //  TGeoCombiTrans *focal_tr = new TGeoCombiTrans(-30*cm, 0, 0, rotfoc);
+  
+  focal_tr->RegisterYourself();
+
+  // Make a focal surface
+  
+  AFocalSurface* focal = new AFocalSurface("focal", focalbox);
+  if(mirror2use != 2) // we can remove the focal plane for better visualization
+    //NOTE: remove it for profile checks
+    world->AddNode(focal, 1, focal_tr);
+  //******************************************************************
+
+  
+
+  manager->CloseGeometry();
+
+  //  world->Draw();
+
+  world->Draw("ogl");
+
+  
+  return manager;
+}
+
+
+TVector3 dirvec(Double_t t_ang, Double_t angle)
+{
+  TVector3  dir_vec;
+  dir_vec.SetX( - Cos(t_ang* DegToRad()) * Sin(angle) );
+  dir_vec.SetY( - Sin(t_ang* DegToRad()) * Sin(angle) );
+  dir_vec.SetZ( - Cos(angle) );
+  
+  return dir_vec;
+}
+
+
+TVector3 dirvecIC(Double_t t_ang, Double_t angle)
+{
+  TVector3  dir_vec;
+  dir_vec.SetX( Cos(t_ang* DegToRad()) * Sin(angle* DegToRad()) );
+  dir_vec.SetY( Sin(t_ang* DegToRad()) * Sin(angle* DegToRad()) );
+  dir_vec.SetZ( Cos(angle* DegToRad()) );
+  
+  return dir_vec;
+}
+
+
+TVector3 dirvecortho(TVector3 dir_vec)
+{
+  TVector3  dir_vec_ortho;
+  dir_vec_ortho.SetX( dir_vec.Y() + dir_vec.Z() );
+  dir_vec_ortho.SetY( dir_vec.Z() - dir_vec.X() );
+  dir_vec_ortho.SetZ(-dir_vec.X() - dir_vec.Y() );
+  return dir_vec_ortho;
+}
+
+TVector3 dirveccer(TVector3 dir_vec)
+{
+  TVector3 dir_vec_cer;
+  
+  dir_vec_cer.SetX(dir_vec.X());
+  dir_vec_cer.SetY(dir_vec.Y());
+  dir_vec_cer.SetZ(dir_vec.Z());
+  return dir_vec_cer;
+      
+}
+      
+
+void ODU_cerenkov()
+{
+  
+  AOpticsManager* manager = MakeGeometry();
+
+  
+  TH2D* hist;
+  hist = new TH2D("Test", "", 300, -15, 15, 300, -20, 20 );
+  hist -> SetTitle(Form("-20cm is the bottom of the box - %f cm from the wall",foc_sep) ) ;
+  hist -> GetXaxis()->SetTitle("Hor [cm]") ;
+  hist -> GetYaxis()->SetTitle("Ver [cm]") ;
+
+  TH1D* histang;
+  histang = new TH1D("Ang", "", 361, -0.5, 360.5 );
+  histang -> SetTitle("Angle of the Cherenkov cone") ;
+  histang -> GetXaxis()->SetTitle("Phi") ;
+
+  TH1D* hAngDisX;
+  hAngDisX = new TH1D("Ang", "", 610, -40, 40 );
+  hAngDisX -> SetTitle("Angular distribution") ;
+  hAngDisX -> GetXaxis()->SetTitle("Theta_X [deg]") ;
+
+  TH1D* hAngDisY;
+  hAngDisY = new TH1D("Ang", "", 610, -40, 40 );
+  hAngDisY -> SetTitle("Angular distribution") ;
+  hAngDisY -> GetXaxis()->SetTitle("Theta_Y [deg]") ;
+
+  TH2D* hAng2D;
+  hAng2D = new TH2D("Ang2d", "", 300, -40, 40, 300, -40, 40 );
+  hAng2D -> SetTitle("Angular Distribution 2D") ;
+  hAng2D -> GetXaxis()->SetTitle("Theta_X [deg]") ;
+  hAng2D -> GetYaxis()->SetTitle("Theta_Y [deg]") ;
+  
+  
+  TH1D* hrandon;
+  hrandon = new TH1D("Ang", "", 2, -0.5, 1.5 );
+  hrandon -> SetTitle("Randon") ;
+  hrandon -> GetXaxis()->SetTitle("rseed") ;
+
+
+  // these were defined  before
+  Double_t dist_T1_FP = 50*cm;
+  Double_t dist_ori = (dist_T1_FP + 5 + 11.0 + 3.32)*cm;
+  
+  Double_t zsep = 0;//cm
+
+
+  // Since I have better control of the whole system, I should redo all the numbers
+  // wrt to the tracker 3 or just floor.
+  Double_t distance = 2132.1; //in mm, the top of the box wrt the FP
+
+  const Int_t kN = 300; // # of particles
+
+
+
+
+
+  
+  for (Int_t i = 0; i < kN; i++)
+    {
+      
+      Double_t lambda =  400 * nm;  // does not affect the results because we have no lens
+
+      // in order to be more randomness, I random the seed of the next random distributions
+      TRandom1 *radSeed = new TRandom1();
+      radSeed->SetSeed(0);
+      Double_t rseed = radSeed->Uniform(0,1);
+
+      // random distribution
+      if (randomDist)
+	{
+	  onewayoranother = (int)(rseed*10)%3;
+	  hrandon ->Fill((int)(rseed*10)%3);
+	}
+      
+
+      // Uniform distribution in phi (x-y)
+      // should work for any generator, especially since we are
+      // using one generator at the time, not all in the same
+      // loop
+      TRandom3 *phi  = new TRandom3();
+      phi->SetSeed(rseed);
+      Double_t t_ang = phi->Uniform(0,360);
+
+      
+      //******************************************************
+      // Circular cone generator
+      // and Elliptical (explain)
+      //******************************************************
+
+      
+    
+      // Uniform distribution of the radius
+      TRandom1 *rad = new TRandom1();
+      rad->SetSeed(rseed);
+      //     Double_t r = rad->Uniform(0, 426);//in mm,  the cone radius at 2132.1mm for theta=11.31
+      //    cout<<"Radius: "<<r<<endl;
+
+
+      //******************************************
+      //Elliptical
+      Double_t r_ell = rad->Uniform(0, 1);// uniform radius of 1
+
+      Double_t x_ell = sqrt(r_ell)*cos( t_ang *DegToRad() );
+      Double_t y_ell = sqrt(r_ell)*sin( t_ang *DegToRad() );
+
+
+      // I just noticed that the relationship large and short is close to 1:2
+      // makes sense, since the short size of TR1 is half the larger...
+      Double_t large_r = 426.6;// in mm. Aperture radius of 11.31 at 2132mm from the FP
+      Double_t short_r = 214.26;// in mm. Aperture radius of 5.739  at 2132mm from the FP
+      //      Double_t short_r = 362;
+
+      // Scale the X-Y to the semi-axis of the ellipse
+      x_ell = x_ell* large_r ; 
+      y_ell = y_ell* short_r ;
+
+      Double_t r = sqrt(x_ell*x_ell + y_ell*y_ell );
+      //******************************************
+      
+      
+      Double_t angle = TMath::ATan( (r/distance)); //in rad. Be careful, r and distance should have same units
+
+      // These lines code the x, y, z position where the Cherenkov is produced
+	  
+      Double_t d_line = sqrt( pow(distance, 2) + pow(r, 2)); // the path length of the particle
+
+      //   Double_t distFP_box =  dist_T1_FP + 20*mm; // the distance from the FP to the box
+
+      Double_t out_d = 520/Cos(angle);//520 is the distance from the FP to the box in mm.
+      // I keep all the values unitless, until the end.
+
+      
+      //      cout<<"angle: "<<angle/DegToRad()<<endl;
+      //      cout<<"d_line: "<<d_line<<" out_d: "<<out_d<<" difference: "<< d_line-out_d<<endl;
+      
+      TRandom3 *randis  = new TRandom3();
+      randis->SetSeed(rseed);
+      Double_t disran = randis->Uniform( (out_d), d_line);
+      
+      //      cout<<"disran: "<<disran<<endl;
+      
+      // USE THESE LINE FOR CERENKOV FROM THE TOP OF THE BOX
+      // Double_t z_ran = distance;
+      // Double_t x_ran = xpos;
+      // Double_t y_ran = ypos;
+
+      // Double_t z_ran = distance;
+      // Double_t x_ran = x_ell;
+      // Double_t y_ran = y_ell;
+
+
+      // USE THESE LINE FOR CERENKOV AT RANDON DISTANCE
+      Double_t z_ran = disran*Cos(angle);
+      Double_t r_ran = disran*Sin(angle);
+      Double_t x_ran = r_ran* Cos(t_ang* DegToRad() );
+      Double_t y_ran = r_ran* Sin(t_ang* DegToRad() );
+
+
+      //***********************************************************************
+      // I need to work a bit more on this condition with the random production
+      if (abs(y_ran) > 440/2) continue; // no Cherenkov rays OUT of the box
+      //***********************************************************************
+      
+      //      cout<<"z_ran: "<<z_ran<<endl;
+      
+      // 1. after determined the random angle of the particle, we create the direction vector of the particle (dir_vec)
+      // 2. from dir_vec, we calculate an orthogonal vector (dir_vec_ortho) to it which will be used as rotation axis
+      // 3. from the particle direction vector we define the Cerenkov direction vector (dir_vec_cer),initially it is the same vector.
+      // 4. then dir_vec_cer is rotated wrt dir_vec_ortho the Cerenkov angle in the medium
+      // 5. we declare an array of rotated vectors (dir_vec_rot[ii]).
+      // 6. Initially we define  dir_vec_rot from  dir_vec_cer, and then is rotated wrt dir_vec, 45 deg, 8 times (could be more).
+        
+      
+      // the direction vector of the 'particle'
+      TVector3 dir_vec =  dirvec(t_ang, angle);
+      
+      // I calculate an orthogonal vector to the direction of the 'particle'
+      TVector3 dir_vec_ortho = dirvecortho(dir_vec);
+  
+      // The 'particle' direction vector is copied to rotate it the Cerenkov angle in the orthogonal vector axis
+      TVector3 dir_vec_cer = dirveccer(dir_vec);
+   
+      // Cerenkov angle
+      Double_t cereang = 1.7185*DegToRad();
+
+      // The Cerenkov vector. 
+      dir_vec_cer.Rotate(cereang, dir_vec_ortho);
+
+      //      cout<<"dX: "<<dir_vec.X()<<" dY: "<<dir_vec.Y()<<" dZ: "<<dir_vec.Z()<<endl;
+     
+      TVector3 dir_vec_rot[8];
+
+
+      //******************************************************
+      // Circular perpendicular ray generator
+      // ROBAST has a generator, but it can't random the origin
+      // of the Cerenkov ray. I will make of the size of the tracker
+      // for simplicity all the variables will start with 'p'
+      //******************************************************
+
+
+      
+      // Uniform distribution of the radius
+      TRandom1 *ranpos = new TRandom1();
+      ranpos -> SetSeed(rseed);
+      Double_t pposY = ranpos ->Uniform(-5, 5);
+      Double_t pposX = ranpos ->Uniform(-10, 10);
+      
+      // cout<<"X: "<<pposX<<" Y: "<<pposY<<endl;
+
+      TRandom3 *ranheight  = new TRandom3();
+      ranheight -> SetSeed(rseed);
+      Double_t pZ = ranheight -> Uniform(550, distance);
+      
+      TVector3 pdir_vec(0, 0, -1);
+      //     cout<<"X: "<<perp_dir_vec.X()<<" Y: "<<perp_dir_vec.Y()<<" X: "<<perp_dir_vec.Z()<<endl;
+
+      TVector3 pdir_vec_ortho = dirvecortho(pdir_vec);
+      TVector3 pdir_vec_cer = dirveccer(pdir_vec);
+      pdir_vec_cer.Rotate(cereang, pdir_vec_ortho);
+
+      TVector3 pdir_vec_rot[8];
+    
+
+
+      //******************************************************
+      // Circular inverse cone generator (prefix IC)
+      // these rays DO NOT focus between trackers 1 and 2
+      //******************************************************
+
+
+
+      //******************************************
+      //Elliptical
+      Double_t ICr_ell = rad->Uniform(0, 1);// uniform radius of 1
+
+      Double_t ICx_ell = sqrt(r_ell)*cos( t_ang *DegToRad() );
+      Double_t ICy_ell = sqrt(r_ell)*sin( t_ang *DegToRad() );
+
+      // The ellipse is comprised to the tracker 1
+      Double_t IClarge_r = 250;// in mm. Aperture radius of 11.31 at 2132mm from the FP
+      Double_t ICshort_r = 125;// in mm.
+
+      ICx_ell = ICx_ell* IClarge_r ; 
+      ICy_ell = ICy_ell* ICshort_r ;
+
+      Double_t ICr = sqrt(ICx_ell*ICx_ell + ICy_ell*ICy_ell );
+
+      Double_t ICorigin_ell = 1750+1167;// in mm. 1750 separation between TR1 and TR2, 1167 distance from TR1 to the origin of the distribution
+
+      // this gives us the theta angle 
+      Double_t ICtheta = TMath::ATan( (ICr/ICorigin_ell)); //in rad. Be careful, r and distance should have same units
+
+      // ALL THE PREVIOUS CALCULUS WAS JUST TO GET THE ELLIPTICAL DISTRIBUTION AND THE ANGLE THETA ASSOCIATED
+      // NOW WE REVERSE THE CALCULUS TO THE POINT WHERE WE WANT THE GENERATION
+      //******************************************
+
+      
+      // we calculate a random position between the bottom of the box and the origin of the distribution
+
+      Double_t ICvertex = 166.7; // cm, the distance from the FP to the vertex where the rays are originated
+
+      
+      TRandom3 *ICrandis  = new TRandom3();
+      ICrandis->SetSeed(rseed);
+      Double_t ICdisran = ICrandis->Uniform(52, 166.7);
+
+      Double_t ICz_ran = ICdisran; //in cm. This is the height from where the beam originates the Cherenkov
+
+      Double_t ICr_ran = (ICvertex-ICdisran)*Tan(ICtheta* DegToRad()); //in cm. The radius from the point where the Cherenkov will be produced
+      
+      Double_t ICx_ran = ICr_ran* Cos(t_ang* DegToRad() );//in cm. Note that the t_ang=phi is the same as the initial step
+      Double_t ICy_ran = ICr_ran* Sin(t_ang* DegToRad() );
+
+
+      TVector3 ICdir_vec =  dirvecIC(t_ang, 180.-(ICtheta/DegToRad()));
+      //******************************************
+
+
+
+      //****************************************************
+      // OLD CODE FOR THE INVERSE CONE DISTRIBUTION
+      
+      /*    
+      TRandom3 *thetaRAN3  = new TRandom3();
+      thetaRAN3->SetSeed(rseed);
+      Double_t ICtheta = thetaRAN3->Uniform(0, 4.898);
+
+      //      cout<<ICtheta<<endl;
+      
+      // the direction vector of the 'particle'
+      // note that the theta angle is rotated in the function --> 180-theta
+      TVector3 ICdir_vec =  dirvecIC(t_ang, 180.-ICtheta);
+
+      Double_t ICvertex = 166.7; // cm, the distance from the FP to the vertex where the rays are originated
+
+      Double_t IClongpath = ICvertex/Cos(ICtheta* DegToRad());
+      Double_t ICshortpath = (ICvertex-52)/Cos(ICtheta* DegToRad());
+      
+      TRandom3 *ICrandis  = new TRandom3();
+      ICrandis->SetSeed(rseed);
+
+      //      Double_t ICdisran = ICrandis->Uniform(ICshortpath, IClongpath);
+
+      Double_t ICdisran = ICrandis->Uniform(52, 166.7);
+
+      //    cout<<ICdisran<<endl;
+
+      // Double_t ICz_ran = ICdisran*Cos(ICtheta* DegToRad());
+      // Double_t ICr_ran = ICdisran*Sin(ICtheta* DegToRad());
+
+      //   Double_t ICz_ran = 166.7;
+      Double_t ICz_ran = ICdisran;
+      
+      Double_t ICr_ran = (ICvertex-ICdisran)*Tan(ICtheta* DegToRad());
+
+      if( ICz_ran < 52.) cout<<"z: "<<ICz_ran<<endl;
+      // cout<<"rad: "<<ICr_ran<<endl;
+      
+      Double_t ICx_ran = ICr_ran* Cos(t_ang* DegToRad() );
+      Double_t ICy_ran = ICr_ran* Sin(t_ang* DegToRad() );
+      */
+      //****************************************************
+
+      
+      // I calculate an orthogonal vector to the direction of the 'particle'
+      TVector3 ICdir_vec_ortho = dirvecortho(ICdir_vec);
+  
+      // The 'particle' direction vector is copied to rotate it the Cerenkov angle in the orthogonal vector axis
+      TVector3 ICdir_vec_cer = dirveccer(ICdir_vec);
+   
+ 
+      // The Cerenkov vector. 
+      ICdir_vec_cer.Rotate(cereang, ICdir_vec_ortho);
+
+      //      cout<<"dX: "<<dir_vec.X()<<" dY: "<<dir_vec.Y()<<" dZ: "<<dir_vec.Z()<<endl;
+     
+      TVector3 ICdir_vec_rot[8];
+
+      
+
+      //******************************************************
+      
+      ARayArray* array =  new ARayArray;;
+     
+      
+      for (int ii = 0; ii<8; ii++)
+	{
+	  Double_t ape = ((45*rseed)+45*ii)*DegToRad();
+	  histang ->Fill(ape/DegToRad());
+	  // and a random phase between 0-45 to have EVERY cone with different phase
+	  
+	  dir_vec_rot[ii].SetX(dir_vec_cer.X());
+	  dir_vec_rot[ii].SetY(dir_vec_cer.Y());
+	  dir_vec_rot[ii].SetZ(dir_vec_cer.Z());
+
+	  dir_vec_rot[ii].Rotate(ape, dir_vec);
+
+	  pdir_vec_rot[ii].SetX(pdir_vec_cer.X());
+	  pdir_vec_rot[ii].SetY(pdir_vec_cer.Y());
+	  pdir_vec_rot[ii].SetZ(pdir_vec_cer.Z());
+
+	  pdir_vec_rot[ii].Rotate(ape+30*DegToRad() , pdir_vec); //I added 30 deg to have the rays not necesarilly the same as the cone
+
+
+	  ICdir_vec_rot[ii].SetX(ICdir_vec_cer.X());
+	  ICdir_vec_rot[ii].SetY(ICdir_vec_cer.Y());
+	  ICdir_vec_rot[ii].SetZ(ICdir_vec_cer.Z());
+
+	  ICdir_vec_rot[ii].Rotate(ape+30*DegToRad() , ICdir_vec); //I added 30 deg to have the rays not necesarilly the same as the cone
+
+	  
+	  //  cout<<"dX[i]: "<<dir_vec_rot[i].X()<<" dY[i]: "<<dir_vec_rot[i].Y()<<" dZ[i]: "<<dir_vec_rot[i].Z()<<endl;
+	  ARay* ray;
+	  ARay* pray;
+	  ARay* ICray;
+	  TPolyLine3D* raypol;
+	  TPolyLine3D* praypol;
+	  TPolyLine3D* ICraypol;
+	  
+	  // With this condition, the distributions are more realistic
+	  //	  if(onewayoranother == 0)
+	  switch(onewayoranother)
+	    {
+	    case 0:
+	      if(rayORphotons)
+		{
+		  ray = new ARay(0, 400*nm, x_ran*mm, y_ran*mm, z_ran*mm, 0,
+				 dir_vec_rot[ii].X(), dir_vec_rot[ii].Y(), dir_vec_rot[ii].Z()
+				 );
+		}
+	      else
+		{
+		  ray = new ARay(0, 400*nm, x_ran*mm, y_ran*mm, z_ran*mm, 0,
+				 dir_vec.X(), dir_vec.Y(), dir_vec.Z()
+				 );
+		}
+	      
+	      array->Add(ray);
+	      manager -> TraceNonSequential(*array);
+	      raypol = ray->MakePolyLine3D();
+	      raypol->SetLineColor(kViolet);
+	      if(drawme)
+		{
+		  if (i<1000) raypol->Draw();
+		}
+		break;
+		
+	    case 1:
+	      if(rayORphotons)
+		{
+		  pray = new ARay(0, 400*nm, pposX, pposY, pZ*mm, 0,
+	       		      pdir_vec_rot[ii].X(), pdir_vec_rot[ii].Y(), pdir_vec_rot[ii].Z()
+				  );
+		}
+	      else
+		{
+		  pray = new ARay(0, 400*nm, pposX, pposY, pZ*mm, 0,
+				  pdir_vec.X(), pdir_vec.Y(), pdir_vec.Z()
+				  );
+		}
+		  
+	      array->Add(pray);
+	      manager -> TraceNonSequential(*array);
+	      praypol = pray->MakePolyLine3D();
+	      praypol->SetLineColor(kGreen);
+	      if(drawme)
+		{
+		  if (i<1000) praypol->Draw();
+		}
+	      break;
+		
+	    case 2:
+	      if(rayORphotons)
+		{
+		  ICray = new ARay(0, 400*nm, ICx_ran, ICy_ran, ICz_ran, 0,
+				   ICdir_vec_rot[ii].X(), ICdir_vec_rot[ii].Y(), ICdir_vec_rot[ii].Z()
+				   );
+	      	}
+	      else
+		{
+		  ICray = new ARay(0, 400*nm, ICx_ran, ICy_ran, ICz_ran, 0,
+				   //  0, 0, ICz_ran, 0,
+				   ICdir_vec.X(), ICdir_vec.Y(), ICdir_vec.Z()
+				   );
+		}
+	      
+	      array->Add(ICray);
+	      manager -> TraceNonSequential(*array);
+	      ICraypol = ICray->MakePolyLine3D();
+	      ICraypol->SetLineColor(kBlue);
+	      if(drawme)
+		{
+		  if (i<1000) ICraypol->Draw();
+		}
+	      break;
+	    }
+
+
+
+
+	  
+	  /*
+	    ARay* testray = new ARay(0, 400*nm, 10*cm, 0, 240*cm, 0,
+	    sin(185*DegToRad()), 0, cos(185*DegToRad())
+	    );
+            
+	    array->Add(testray);
+      
+	    manager -> TraceNonSequential(*array);
+            
+	    TPolyLine3D* praypol = testray->MakePolyLine3D();
+	    praypol->SetLineColor(kBlue);
+	    praypol->Draw();	  
+	  */
+      
+	  //******************************************************
+
+      
+	  // Checking THIS object allows to plot the rays we are interested
+	  // to analyze, plot or visualize
+	  TObjArray* focused = array->GetFocused();
+	
+	  //   the mean <x> and <y>
+	  //   TH2D mean("", "", 1, -10 * m, 10 * m, 1, -10 * m, 10 * m);
+
+          
+	  for (Int_t j = 0; j <= focused->GetLast(); j++)
+	    {
+	      ARay* fray = (ARay*)(*focused)[j];
+	      Double_t p[4], p0[4];
+
+	      // //	  Double_t *pp0[4];
+	      // Double_t *pp0[4]= &(fray->GetPoint(2));
+	
+	      //	  p0 = fray->GetPoint(2,p0);
+	  
+	      // cout<< fray->GetPoint(2)<<endl;
+	      //	  cout<<"points: "<<  fray->GetNpoints()<<endl;
+	  
+
+	      fray->GetDirection(p0);//p[0]=X; p[1]=Y; p[2]=Z
+	      // cout<<p0[0]<<" "<<p0[1]<<" "<<p0[2]<<endl;
+	      // cout<<"Theta: "<<90.-acos(p0[2])/DegToRad()<<endl;
+
+	      hAngDisY -> Fill(90.-acos(p0[2])/DegToRad());
+	      hAngDisX -> Fill(atan(p0[1]/p0[0])/DegToRad());
+
+	      hAng2D -> Fill(atan(p0[1]/p0[0])/DegToRad(), 90.-acos(p0[2])/DegToRad() );
+	      //     hAng2D -> Fill(90.-acos(p0[2])/DegToRad(), atan(p0[1]/p0[0])/DegToRad());
+
+
+	      fray->GetLastPoint(p);//p[0]=X; p[1]=Y; p[2]=Z
+	      //cout<<p[0]<<" "<<p[1]<<" "<<p[2]<<endl;
+
+	  
+	      //     hist->Fill(p[1], p[2]-dist_ori );// In the Box system, Y(box) is X in the histo, Z(box) is Y in the histo
+	      hist->Fill(p[1], p[2] -(dist_T1_FP + 2.5*cm+20*cm) );// In the Box system, Y(box) is X in the histo, Z(box) is Y in the histo
+	    }  // j
+
+  
+	}    // if
+
+
+    }
+
+
+  // This only draws the gepometry, not the rays.
+  // TGLViewer * v = (TGLViewer *)gPad->GetViewer3D();
+  // v->SavePicture("viewer.png");
+  // v->SavePicture("viewer.pdf");
+  
+ 
+  TCanvas* can_spot = new TCanvas("can_spot", "can_spot", 600, 600);
+  //  gStyle->SetOptStat(0);
+  hist -> SetMarkerStyle(20);
+  hist -> SetMarkerSize(.5);
+  hist -> Draw("col");
+
+  // TCanvas* can_angle = new TCanvas("can_angle", "can_angle", 600, 600);
+  // //  gStyle->SetOptStat(0);
+  // histang -> SetMarkerStyle(20);
+  // histang-> SetMarkerSize(.5);
+  // histang->Draw();
+  
+  TCanvas* can_angdis = new TCanvas("can_angdis", "can_angdis", 1000, 1000);
+  can_angdis -> Divide(2,2);
+
+  can_angdis -> cd(1);
+  hAngDisX -> SetMarkerStyle(20);
+  hAngDisX -> SetMarkerSize(.5);
+  hAngDisX -> Draw();
+  
+  can_angdis -> cd(2);
+  hAngDisY -> SetMarkerStyle(20);
+  hAngDisY -> SetMarkerSize(.5);
+  hAngDisY -> Draw();
+
+  can_angdis -> cd(3);
+  hAng2D -> SetMarkerStyle(20);
+  hAng2D -> SetMarkerSize(.5);
+  hAng2D -> Draw("col");
+
+  can_angdis -> cd(4);
+  hist -> SetMarkerStyle(20);
+  hist -> SetMarkerSize(.5);
+  hist -> Draw("col");
+
+  TCanvas* can_projY = new TCanvas("can_projY", "can_projY", 1000, 1000);
+  can_projY -> Divide(5,4);
+
+  TH1D* hProjY;
+  for (Int_t kk = 0; kk < 20; kk++)
+    {
+      can_projY -> cd(kk+1);
+      hProjY = hist->ProjectionY(Form("hProjY%d",kk), 51+(10*kk), 51+(10*kk)+5 );
+      Double_t Xposproj = -10.+((10.*kk))/10.;
+
+      Int_t b_max = hProjY -> GetMaximumBin();
+      Double_t x_max = hProjY -> GetBinCenter(b_max);
+      Double_t y_max = hProjY -> GetBinContent(b_max);
+      
+
+      
+      cout<<y_max<<endl;
+
+   
+
+      
+      hProjY -> SetTitle(Form("X = %.1f cm", Xposproj));
+      hProjY -> Draw();
+
+      auto l = new TLine(x_max, hProjY->GetMinimum(),x_max,y_max);
+      l->SetLineWidth(1.5);
+      l->SetLineColor(kRed);
+      l->Draw();
+      
+      can_projY->Modified();
+      can_projY->Update();
+    }
+  
+  
+  // can_angdis -> Print(Form("./Elliptical/%s-%fcm.pdf",mirror_case, foc_sep));
+  // can_angdis -> Print(Form("./Elliptical/%s-%fcm.png",mirror_case, foc_sep));
+  
+
+  /*		     
+		     TCanvas* can_ran = new TCanvas("can_ran", "can_ran", 600, 600);
+		     //  gStyle->SetOptStat(0);
+		     hrandon -> SetMarkerStyle(20);
+		     hrandon -> SetMarkerSize(.5);
+		     hrandon -> Draw();
+  */
+
+
+
+}
